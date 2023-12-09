@@ -1,0 +1,112 @@
+variables:
+  COMPANY_NAME: shawa
+  APPNAME_SHORT: blog
+
+
+stages:
+  - restart
+  - build
+  - deploy
+
+restart_docker:
+  stage: restart
+  tags:
+    - $RUNNER_TAG_JOB
+  script:
+  variables:
+    SERVICE_DIR: "/opt/docker/swap"
+  script:
+    - docker-compose -f ${SERVICE_DIR}/docker-compose.yml restart
+    - docker ps
+    - echo "restart done"
+  when: manual
+  parallel:
+    matrix:
+      - RUNNER_TAG_JOB: 
+         - "swapper-01"
+         - "swapper-02"
+         - "swapper-03"
+         - "swapper-05"
+
+.docker_build: &docker_build
+  stage: build
+  tags:
+    - tesla_runner
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - echo $PYTHON_BASE_IMAGE
+    - ls -la
+    - >
+      DOCKER_BUILDKIT=1 docker build
+      -f Dockerfile --progress=plain
+      --tag ${CI_REGISTRY_IMAGE}:${BUILD_VERSION}
+      . --no-cache
+    - docker push $CI_REGISTRY_IMAGE --all-tags
+
+.docker_deploy: &docker_deploy
+  stage: deploy
+  tags:
+    - tesla_runner
+  variables:
+    DEPLOY_VERSION: ${BUILD_VERSION}
+    SERVICE_DIR: "/opt/docker/swap"
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - |
+      cat > ${SERVICE_DIR}/.env << EOF
+      IMAGE_NAME: $CI_REGISTRY_IMAGE
+      IMAGE_VERSION=${DEPLOY_VERSION}
+      EOF
+    - docker-compose -f ${SERVICE_DIR}/docker-compose.yml up -d --remove-orphans
+    - echo "deploy done"
+
+docker_latest:
+  extends: .docker_build
+  variables:
+    BUILD_VERSION: "latest-${CI_COMMIT_SHORT_SHA}"
+  only:
+    - master
+
+docker_release:
+  extends: .docker_build
+  variables:
+    BUILD_VERSION: "${CI_COMMIT_TAG}"
+  only:
+    - tags
+
+deploy_latest:
+  extends: .docker_deploy
+  tags:
+    - $RUNNER_TAG_JOB
+  variables:
+    BUILD_VERSION: "latest-${CI_COMMIT_SHORT_SHA}"
+  only:
+    - master
+  parallel:
+    matrix:
+      - RUNNER_TAG_JOB: 
+         - "swapper-01"
+         - "swapper-02"
+         - "swapper-03"
+         - "swapper-05"
+
+deploy_release:
+  extends: .docker_build
+  tags:
+    - $RUNNER_TAG_JOB
+  variables:
+    BUILD_VERSION: "${CI_COMMIT_TAG}"
+  only:
+    - tags
+  parallel:
+    matrix:
+      - RUNNER_TAG_JOB: 
+         - "swapper-01"
+         - "swapper-02"
+         - "swapper-03"
+         - "swapper-05"
+  only:
+    - tags
+#
